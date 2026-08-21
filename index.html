@@ -738,12 +738,36 @@ function formatAnswerWithDivider(text) {
         .join('<hr class="paragraph-divider">');
 }
 
+/* =========================
+   이전 질문(답변 항목) 중복 방지
+   - 같은 답변 항목으로 분류된 질문은
+     표현이 달라도 중복 질문으로 처리
+   - sessionStorage 사용: 새로고침에는 유지되지만
+     브라우저 탭/세션을 새로 시작하면 초기화
+   ========================= */
+const DUPLICATE_MESSAGE =
+  "이 질문은 이전에 다룬 질문과 유사한 내용입니다. 다른 질문을 해주세요.";
+
+const answeredResponseIndexes = new Set(
+  JSON.parse(sessionStorage.getItem("answeredResponseIndexes") || "[]")
+);
+
+function markResponseAsAnswered(index) {
+  answeredResponseIndexes.add(index);
+  sessionStorage.setItem(
+    "answeredResponseIndexes",
+    JSON.stringify([...answeredResponseIndexes])
+  );
+}
+
 /* 키워드 매칭 함수 */
 function getKeywordAnswer(message) {
   let bestAnswer = null;
+  let bestIndex = -1;
   let highestScore = 0;
 
-  for (const item of responses) {
+  for (let i = 0; i < responses.length; i++) {
+    const item = responses[i];
     let score = 0;
 
     for (const keywordObj of item.keywords) {
@@ -755,44 +779,104 @@ function getKeywordAnswer(message) {
     if (score > highestScore) {
       highestScore = score;
       bestAnswer = item.answer;
+      bestIndex = i;
     }
   }
 
-  return bestAnswer || "죄송해요, 무슨 말인지 잘 모르겠어요.";
+  /* 기존 답변과 연결되지 않는 질문 */
+  if (bestIndex === -1) {
+    return "죄송해요, 무슨 말인지 잘 모르겠어요.";
+  }
+
+  /*
+   * 이미 같은 답변 항목이 제공된 적이 있으면
+   * 질문 문장이 달라도 중복 질문으로 처리
+   */
+  if (answeredResponseIndexes.has(bestIndex)) {
+    return DUPLICATE_MESSAGE;
+  }
+
+  /* 처음 나온 질문 유형이면 답변 항목을 사용한 것으로 기록 */
+  markResponseAsAnswered(bestIndex);
+
+  return bestAnswer;
 }
 
-/* 메시지 처리 */
-const delayInSeconds = 20;
+/* =========================
+   메시지 처리
+   ========================= */
+
+const NORMAL_DELAY_SECONDS = 20;
+const SPECIAL_DELAY_SECONDS = 3;
+
+const DUPLICATE_MESSAGE =
+  "이 질문은 이전에 다룬 질문과 유사한 내용입니다. 다른 질문을 해주세요.";
+
+const INVALID_MESSAGE =
+  "죄송해요, 무슨 말인지 잘 모르겠어요.";
+
 
 function handleSubmit() {
   const message = userInput.value.trim();
+
   if (!message) return;
 
   // 1. 사용자 메시지 출력
   addMessage(message, "user");
   userInput.value = "";
 
-  // 2. 로딩 메시지
+  // 2. 먼저 답변을 결정
+  //    → 어떤 종류의 답변인지 확인하기 위해 먼저 실행
+  const rawAnswer = getKeywordAnswer(message);
+
+  /*
+   * 3. 답변 유형에 따라 지연 시간 결정
+   *
+   * 정상 답변:
+   *     → 20초
+   *
+   * 중복 질문:
+   *     → 3초
+   *
+   * 이해할 수 없는 질문:
+   *     → 3초
+   */
+  let delaySeconds = NORMAL_DELAY_SECONDS;
+
+  if (
+    rawAnswer === DUPLICATE_MESSAGE ||
+    rawAnswer === INVALID_MESSAGE
+  ) {
+    delaySeconds = SPECIAL_DELAY_SECONDS;
+  }
+
+  // 4. 로딩 메시지
   const loading = document.createElement("div");
   loading.className = "chat-message bot";
   loading.textContent = "⏳ 잠시만 기다려 주세요...";
+
   chatDisplay.appendChild(loading);
   chatDisplay.scrollTop = chatDisplay.scrollHeight;
 
+  // 5. 설정된 시간만큼 기다린 후 답변 출력
   setTimeout(() => {
-    chatDisplay.removeChild(loading);
 
-    // 3. 봇 응답 생성
-    const rawAnswer = getKeywordAnswer(message);
-    const formattedAnswer = formatAnswerWithDivider(rawAnswer);
+    // 로딩 메시지 제거
+    if (loading.parentNode) {
+      loading.parentNode.removeChild(loading);
+    }
 
-    // 4. 봇 응답 출력
+    // 6. 답변 포맷 적용
+    const formattedAnswer =
+      formatAnswerWithDivider(rawAnswer);
+
+    // 7. 봇 응답 출력
     typeMessage(formattedAnswer, "bot");
 
-    // 5. Google Script 저장
+    // 8. Google Script 저장
     saveChatLog(message, formattedAnswer);
 
-  }, delayInSeconds * 1000);
+  }, delaySeconds * 1000);
 }
 
 function addMessage(text, sender) {
