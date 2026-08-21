@@ -163,7 +163,7 @@ console.log("SoSci CASE ID:", socsiCaseId);
    2. Google Script URL
    ========================= */
 const GOOGLE_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbwPiJwSPaeuepQ5CbHQunbyB_RY99p-AcgehLomjBNdLvWCA5nIge_A8z2INh-H5q02kQ/exec";
+  "https://script.google.com/macros/s/AKfycbz337BAh86d_zEnez0V-T49k4FyJiON5-Sgug_CEskZ3rxotGL76UJP4dGgQmlt2_pXqg/exec";
 
 const chatDisplay = document.getElementById("chatDisplay");
 const userInput = document.getElementById("userInput");
@@ -738,12 +738,36 @@ function formatAnswerWithDivider(text) {
         .join('<hr class="paragraph-divider">');
 }
 
+/* =========================
+   이전 질문(답변 항목) 중복 방지
+   - 같은 답변 항목으로 분류된 질문은
+     표현이 달라도 중복 질문으로 처리
+   - sessionStorage 사용: 새로고침에는 유지되지만
+     브라우저 탭/세션을 새로 시작하면 초기화
+   ========================= */
+const DUPLICATE_MESSAGE =
+  "이 질문은 이전에 다룬 질문과 유사한 내용입니다. 다른 질문을 해주세요.";
+
+const answeredResponseIndexes = new Set(
+  JSON.parse(sessionStorage.getItem("answeredResponseIndexes") || "[]")
+);
+
+function markResponseAsAnswered(index) {
+  answeredResponseIndexes.add(index);
+  sessionStorage.setItem(
+    "answeredResponseIndexes",
+    JSON.stringify([...answeredResponseIndexes])
+  );
+}
+
 /* 키워드 매칭 함수 */
 function getKeywordAnswer(message) {
   let bestAnswer = null;
+  let bestIndex = -1;
   let highestScore = 0;
 
-  for (const item of responses) {
+  for (let i = 0; i < responses.length; i++) {
+    const item = responses[i];
     let score = 0;
 
     for (const keywordObj of item.keywords) {
@@ -755,10 +779,27 @@ function getKeywordAnswer(message) {
     if (score > highestScore) {
       highestScore = score;
       bestAnswer = item.answer;
+      bestIndex = i;
     }
   }
 
-  return bestAnswer || "죄송해요, 무슨 말인지 잘 모르겠어요.";
+  /* 기존 답변과 연결되지 않는 질문 */
+  if (bestIndex === -1) {
+    return "죄송해요, 무슨 말인지 잘 모르겠어요.";
+  }
+
+  /*
+   * 이미 같은 답변 항목이 제공된 적이 있으면
+   * 질문 문장이 달라도 중복 질문으로 처리
+   */
+  if (answeredResponseIndexes.has(bestIndex)) {
+    return DUPLICATE_MESSAGE;
+  }
+
+  /* 처음 나온 질문 유형이면 답변 항목을 사용한 것으로 기록 */
+  markResponseAsAnswered(bestIndex);
+
+  return bestAnswer;
 }
 
 /* 메시지 처리 */
