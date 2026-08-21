@@ -760,52 +760,16 @@ function markResponseAsAnswered(index) {
   );
 }
 
-/* 키워드 매칭 함수 */
-function getKeywordAnswer(message) {
-  let bestAnswer = null;
-  let bestIndex = -1;
-  let highestScore = 0;
-
-  for (let i = 0; i < responses.length; i++) {
-    const item = responses[i];
-    let score = 0;
-
-    for (const keywordObj of item.keywords) {
-      if (message.includes(keywordObj.word)) {
-        score += keywordObj.weight;
-      }
-    }
-
-    if (score > highestScore) {
-      highestScore = score;
-      bestAnswer = item.answer;
-      bestIndex = i;
-    }
-  }
-
-  /* 기존 답변과 연결되지 않는 질문 */
-  if (bestIndex === -1) {
-    return "죄송해요, 무슨 말인지 잘 모르겠어요.";
-  }
-
-  /*
-   * 이미 같은 답변 항목이 제공된 적이 있으면
-   * 질문 문장이 달라도 중복 질문으로 처리
-   */
-  if (answeredResponseIndexes.has(bestIndex)) {
-    return DUPLICATE_MESSAGE;
-  }
-
-  /* 처음 나온 질문 유형이면 답변 항목을 사용한 것으로 기록 */
-  markResponseAsAnswered(bestIndex);
-
-  return bestAnswer;
-}
 
 /* =========================
    메시지 처리
    ========================= */
 
+/*
+ * 정상적인 질문 → 20초
+ * 중복 질문 → 3초
+ * 이해할 수 없는 질문 → 3초
+ */
 const NORMAL_DELAY_SECONDS = 20;
 const SPECIAL_DELAY_SECONDS = 3;
 
@@ -816,64 +780,158 @@ const INVALID_MESSAGE =
   "죄송해요, 무슨 말인지 잘 모르겠어요.";
 
 
-function handleSubmit() {
-  const message = userInput.value.trim();
+/* =========================
+   답변 종류 판별
+   ========================= */
 
-  if (!message) return;
+function getAnswerType(message) {
 
-  // 1. 사용자 메시지 출력
-  addMessage(message, "user");
-  userInput.value = "";
+  let bestAnswer = null;
+  let bestIndex = -1;
+  let highestScore = 0;
 
-  // 2. 먼저 답변을 결정
-  //    → 어떤 종류의 답변인지 확인하기 위해 먼저 실행
-  const rawAnswer = getKeywordAnswer(message);
+  for (let i = 0; i < responses.length; i++) {
 
-  /*
-   * 3. 답변 유형에 따라 지연 시간 결정
-   *
-   * 정상 답변:
-   *     → 20초
-   *
-   * 중복 질문:
-   *     → 3초
-   *
-   * 이해할 수 없는 질문:
-   *     → 3초
-   */
-  let delaySeconds = NORMAL_DELAY_SECONDS;
+    const item = responses[i];
+    let score = 0;
 
-  if (
-    rawAnswer === DUPLICATE_MESSAGE ||
-    rawAnswer === INVALID_MESSAGE
-  ) {
-    delaySeconds = SPECIAL_DELAY_SECONDS;
+    for (const keywordObj of item.keywords) {
+
+      if (message.includes(keywordObj.word)) {
+        score += keywordObj.weight;
+      }
+
+    }
+
+    if (score > highestScore) {
+      highestScore = score;
+      bestAnswer = item.answer;
+      bestIndex = i;
+    }
   }
 
-  // 4. 로딩 메시지
+
+  /* -------------------------
+     1. 이해할 수 없는 질문
+     ------------------------- */
+
+  if (bestIndex === -1) {
+
+    return {
+      answer: INVALID_MESSAGE,
+      type: "invalid",
+      delay: SPECIAL_DELAY_SECONDS
+    };
+
+  }
+
+
+  /* -------------------------
+     2. 이전에 답변한 질문
+     ------------------------- */
+
+  if (answeredResponseIndexes.has(bestIndex)) {
+
+    return {
+      answer: DUPLICATE_MESSAGE,
+      type: "duplicate",
+      delay: SPECIAL_DELAY_SECONDS
+    };
+
+  }
+
+
+  /* -------------------------
+     3. 새로운 정상 질문
+     ------------------------- */
+
+  markResponseAsAnswered(bestIndex);
+
+  return {
+    answer: bestAnswer,
+    type: "normal",
+    delay: NORMAL_DELAY_SECONDS
+  };
+}
+
+
+/* =========================
+   질문 제출
+   ========================= */
+
+function handleSubmit() {
+
+  const message = userInput.value.trim();
+
+  if (!message) {
+    return;
+  }
+
+
+  /* -------------------------
+     1. 사용자 질문 표시
+     ------------------------- */
+
+  addMessage(message, "user");
+
+  userInput.value = "";
+
+
+  /* -------------------------
+     2. 답변 종류 확인
+     ------------------------- */
+
+  const result = getAnswerType(message);
+
+  const rawAnswer = result.answer;
+  const delaySeconds = result.delay;
+
+
+  console.log("질문:", message);
+  console.log("답변 유형:", result.type);
+  console.log("응답 지연:", delaySeconds + "초");
+
+
+  /* -------------------------
+     3. 로딩 메시지
+     ------------------------- */
+
   const loading = document.createElement("div");
+
   loading.className = "chat-message bot";
   loading.textContent = "⏳ 잠시만 기다려 주세요...";
 
   chatDisplay.appendChild(loading);
   chatDisplay.scrollTop = chatDisplay.scrollHeight;
 
-  // 5. 설정된 시간만큼 기다린 후 답변 출력
-  setTimeout(() => {
 
-    // 로딩 메시지 제거
-    if (loading.parentNode) {
+  /* -------------------------
+     4. 응답 지연
+     ------------------------- */
+
+  setTimeout(function() {
+
+    /* 로딩 메시지 제거 */
+
+    if (loading && loading.parentNode) {
       loading.parentNode.removeChild(loading);
     }
 
-    // 6. 답변 포맷 적용
+
+    /* -------------------------
+       5. 답변 출력
+       ------------------------- */
+
     const formattedAnswer =
       formatAnswerWithDivider(rawAnswer);
 
-    // 7. 봇 응답 출력
     typeMessage(formattedAnswer, "bot");
 
-    // 8. Google Script 저장
+
+    /* -------------------------
+       6. Google Sheet 저장
+       ------------------------- */
+
     saveChatLog(message, formattedAnswer);
 
   }, delaySeconds * 1000);
