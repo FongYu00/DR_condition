@@ -748,13 +748,31 @@ function formatAnswerWithDivider(text) {
 const DUPLICATE_MESSAGE =
   "이 질문은 이전에 다룬 질문과 유사한 내용입니다. 다른 질문을 해주세요.";
 
+const UNKNOWN_MESSAGE = "죄송해요, 무슨 말인지 잘 모르겠어요.";
+
+function safeGetSessionItem(key) {
+  try {
+    return sessionStorage.getItem(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function safeSetSessionItem(key, value) {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch (e) {
+    // SoSci iframe 또는 일부 브라우저에서 storage 접근이 막혀도 챗봇은 계속 작동하게 함
+  }
+}
+
 const answeredResponseIndexes = new Set(
-  JSON.parse(sessionStorage.getItem("answeredResponseIndexes") || "[]")
+  JSON.parse(safeGetSessionItem("answeredResponseIndexes") || "[]")
 );
 
 function markResponseAsAnswered(index) {
   answeredResponseIndexes.add(index);
-  sessionStorage.setItem(
+  safeSetSessionItem(
     "answeredResponseIndexes",
     JSON.stringify([...answeredResponseIndexes])
   );
@@ -785,7 +803,7 @@ function getKeywordAnswer(message) {
 
   /* 기존 답변과 연결되지 않는 질문 */
   if (bestIndex === -1) {
-    return "죄송해요, 무슨 말인지 잘 모르겠어요.";
+    return UNKNOWN_MESSAGE;
   }
 
   /*
@@ -803,7 +821,15 @@ function getKeywordAnswer(message) {
 }
 
 /* 메시지 처리 */
-const delayInSeconds = 20;
+const DEFAULT_DELAY_SECONDS = 20;
+const SHORT_DELAY_SECONDS = 3;
+
+function getDelayInSeconds(answer) {
+  if (answer === DUPLICATE_MESSAGE || answer === UNKNOWN_MESSAGE) {
+    return SHORT_DELAY_SECONDS;
+  }
+  return DEFAULT_DELAY_SECONDS;
+}
 
 function handleSubmit() {
   const message = userInput.value.trim();
@@ -813,7 +839,12 @@ function handleSubmit() {
   addMessage(message, "user");
   userInput.value = "";
 
-  // 2. 로딩 메시지
+  // 2. 봇 응답을 먼저 생성해서 응답 종류별 대기 시간을 정함
+  const rawAnswer = getKeywordAnswer(message);
+  const formattedAnswer = formatAnswerWithDivider(rawAnswer);
+  const delayInSeconds = getDelayInSeconds(rawAnswer);
+
+  // 3. 로딩 메시지
   const loading = document.createElement("div");
   loading.className = "chat-message bot";
   loading.textContent = "⏳ 잠시만 기다려 주세요...";
@@ -821,11 +852,9 @@ function handleSubmit() {
   chatDisplay.scrollTop = chatDisplay.scrollHeight;
 
   setTimeout(() => {
-    chatDisplay.removeChild(loading);
-
-    // 3. 봇 응답 생성
-    const rawAnswer = getKeywordAnswer(message);
-    const formattedAnswer = formatAnswerWithDivider(rawAnswer);
+    if (loading.parentNode === chatDisplay) {
+      chatDisplay.removeChild(loading);
+    }
 
     // 4. 봇 응답 출력
     typeMessage(formattedAnswer, "bot");
@@ -835,6 +864,8 @@ function handleSubmit() {
 
   }, delayInSeconds * 1000);
 }
+
+window.handleSubmit = handleSubmit;
 
 function addMessage(text, sender) {
     const msg = document.createElement("div");
@@ -864,13 +895,25 @@ function typeMessage(text, sender) {
     }, 20);
 }
 
-function getOrCreateParticipantId() {
-  let pid = localStorage.getItem("participant_id");
-  if (!pid) {
-    pid = "P_" + crypto.randomUUID();
-    localStorage.setItem("participant_id", pid);
+function createFallbackParticipantId() {
+  if (window.crypto && typeof crypto.randomUUID === "function") {
+    return "P_" + crypto.randomUUID();
   }
-  return pid;
+
+  return "P_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+}
+
+function getOrCreateParticipantId() {
+  try {
+    let pid = localStorage.getItem("participant_id");
+    if (!pid) {
+      pid = createFallbackParticipantId();
+      localStorage.setItem("participant_id", pid);
+    }
+    return pid;
+  } catch (e) {
+    return createFallbackParticipantId();
+  }
 }
 
 //     function addBotMessage(text) {
